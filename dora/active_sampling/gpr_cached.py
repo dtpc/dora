@@ -14,9 +14,10 @@ class GPRCached(GPR):
         Caching based on https://github.com/GPflow/GPflow/issues/333
     """
 
-    def __init__(self, x, y, kern, mean_function=Zero()):
+    def __init__(self, x, y, kern, mean_function=Zero(), name='name'):
         """Initialize GP and Cholesky decomposition."""
-        GPR.__init__(self, x, y, kern=kern, mean_function=mean_function)
+        GPR.__init__(self, x, y, kern=kern, mean_function=mean_function,
+                     name=name)
 
         # Create new dataholders for the cached data
         self.cholesky = DataHolder(np.empty((0, 0), dtype=np.float64),

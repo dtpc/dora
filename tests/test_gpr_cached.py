@@ -54,7 +54,8 @@ def test_cache_sync(data_gen):
     """
     X, Y = data_gen(1000)
     m = GPRCached(X, Y, kern=gp.kernels.RBF(X.shape[1]),
-                  mean_function=gp.mean_functions.Constant())
+                  mean_function=gp.mean_functions.Constant(),
+                  name='GPRCached')
 
     # optimize
     L0 = m.cholesky.value
@@ -218,3 +219,4 @@ def test_cholesky_downdate(data_gen):
 
     for L1, L2 in zip(m1_Ls, m2_Ls):
         assert np.allclose(L1, L2)
+    
