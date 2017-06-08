@@ -33,14 +33,16 @@ def time_it(fn):
 
 
 @pytest.fixture(scope='module')
-def gpr_cached_sync(data_gen):
-    X, Y = data_gen(1000)
+def gpr_cached_sync():
+    """ A GPRCached object for testing cache sync with various updates. """
+    X, Y = data_gen()(1000)
     m = GPRCached(X, Y, kern=gp.kernels.RBF(X.shape[1]),
                   mean_function=gp.mean_functions.Constant())
-    return m
+    yield m
 
 
 def test_cache_optimize(gpr_cached_sync):
+    """ Test that cached is updated after optimising. """
     m = gpr_cached_sync
     L0 = m.cholesky.value
     m.optimize()
@@ -48,44 +50,42 @@ def test_cache_optimize(gpr_cached_sync):
     assert not np.array_equal(L0, L1)
 
 
-def test_cache_sync(data_gen):
-    """ Test that cached is updated after optimising, updating the hyper
-        parameters, or resetting X, Y
-    """
-    X, Y = data_gen(1000)
-    m = GPRCached(X, Y, kern=gp.kernels.RBF(X.shape[1]),
-                  mean_function=gp.mean_functions.Constant(),
-                  name='GPRCached')
-
-    # optimize
+def test_cache_set_state(gpr_cached_sync):
+    """ Test that cached is updated after setting state. """
+    m = gpr_cached_sync
     L0 = m.cholesky.value
-    m.optimize()
+    new_state = m.get_free_state() + 0.1
+    m.set_state(new_state)
     L1 = m.cholesky.value
     assert not np.array_equal(L0, L1)
 
-    # set parameters by free state
-    new_state = m.get_free_state() + 0.1
-    m.set_state(new_state)
-    L2 = m.cholesky.value
-    assert not np.array_equal(L1, L2)
 
-    # set parameters by dict
+def test_cache_set_param_dict(gpr_cached_sync):
+    """ Test that cached is updated after setting parameter dict. """
+    m = gpr_cached_sync
+    L0 = m.cholesky.value
     new_params = {k: v + 0.1 for k, v in m.get_parameter_dict().items()}
     m.set_parameter_dict(new_params)
-    L3 = m.cholesky.value
-    assert not np.array_equal(L2, L3)
+    L1 = m.cholesky.value
+    assert not np.array_equal(L0, L1)
 
-    # reset data points
+
+def test_cache_set_data_points(gpr_cached_sync):
+    """ Test that cached is updated after setting data points X and Y. """
+    m = gpr_cached_sync
+
     new_X = m.X.value + 0.1
     new_Y = m.Y.value + 0.1
+
     with pytest.raises(ValueError):
         m.X = new_X
     with pytest.raises(ValueError):
         m.Y = new_Y
 
+    L0 = m.cholesky.value
     m.set_data_points(new_X, new_Y)
-    L4 = m.cholesky.value
-    assert not np.array_equal(L3, L4)
+    L1 = m.cholesky.value
+    assert not np.array_equal(L0, L1)
 
 
 def test_cholesky_caching(data_gen):
@@ -219,4 +219,3 @@ def test_cholesky_downdate(data_gen):
 
     for L1, L2 in zip(m1_Ls, m2_Ls):
         assert np.allclose(L1, L2)
-    
