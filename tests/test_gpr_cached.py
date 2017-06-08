@@ -32,13 +32,27 @@ def time_it(fn):
     return _wrapper
 
 
+@pytest.fixture(scope='module')
+def gpr_cached_sync(data_gen):
+    X, Y = data_gen(1000)
+    m = GPRCached(X, Y, kern=gp.kernels.RBF(X.shape[1]),
+                  mean_function=gp.mean_functions.Constant())
+    return m
+
+
+def test_cache_optimize(gpr_cached_sync):
+    m = gpr_cached_sync
+    L0 = m.cholesky.value
+    m.optimize()
+    L1 = m.cholesky.value
+    assert not np.array_equal(L0, L1)
+
+
 def test_cache_sync(data_gen):
     """ Test that cached is updated after optimising, updating the hyper
         parameters, or resetting X, Y
     """
     X, Y = data_gen(1000)
-    print(X.shape)
-    print(Y.shape)
     m = GPRCached(X, Y, kern=gp.kernels.RBF(X.shape[1]),
                   mean_function=gp.mean_functions.Constant())
 
