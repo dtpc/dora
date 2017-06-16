@@ -13,15 +13,10 @@ model.
 
 """
 import logging
-
 import dora.active_sampling as sampling
-
 from dora.active_sampling import pltutils
-
 from demos.example_processes import simulate_measurement
-
 import matplotlib.pyplot as pl
-
 from time import sleep
 
 
@@ -35,7 +30,6 @@ def main(sampler_model='GaussianProcess', plot=False):
     logging.info('\n \n Sampler Model: %s' % sampler_model)
     sleep(3)
 
-
     # Initialise the sampler
     if sampler_model == 'GaussianProcess':
         acq_name = 'sigmoid'
@@ -43,10 +37,10 @@ def main(sampler_model='GaussianProcess', plot=False):
         sampler = sampling.GaussianProcess(lower, upper, acq_name=acq_name,
                                            n_train=n_train, seed=100)
     elif sampler_model == 'GPflowSampler':
-        acq_name = 'sigmoid'
+        acq_fn = sampling.acquisition_functions.Sigmoid()
         n_train = 30
-        sampler = sampling.GPflowSampler(lower, upper, acq_name=acq_name,
-                                         n_train=n_train, seed=100)
+        sampler = sampling.GPflowSampler(lower, upper, n_train=n_train,
+                                         acquisition_function=acq_fn, seed=100)
 
     elif sampler_model == 'Delaunay':
 
@@ -71,7 +65,7 @@ def main(sampler_model='GaussianProcess', plot=False):
     for i in range(n_samples):
 
         # Log the iteration number
-        if divmod(i,100)[1] == 0:
+        if divmod(i, 100)[1] == 0:
             log_info = True
             logging.info('Iteration: %d' % i)
 
@@ -95,8 +89,6 @@ def main(sampler_model='GaussianProcess', plot=False):
         # Plot the sampler progress
         if plot and i in plot_triggers:
             pltutils.plot_sampler_progress(sampler, next(axs))
-
-
 
     # Sampler demos must return the sampler itself
     return sampler
