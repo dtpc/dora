@@ -1,4 +1,4 @@
-from sk_gpflow import GPRModel
+from .sk_gpflow import GPflowRegressor
 from .base_sampler import Sampler, random_sample
 from .acquisition_functions import UpperBound
 
@@ -12,7 +12,6 @@ class GPflowSampler(Sampler):
     """
     name = 'GPflowSampler'
 
-
     def __init__(self, lower, upper, n_train=50, kern=None, mean_fn=None,
                  acq_fn=UpperBound(), seed=None):
         """ Initialise the GPflowSampler.
@@ -23,7 +22,7 @@ class GPflowSampler(Sampler):
         self.acq_fn = acq_fn
         kern = kern or gp.kernels.RBF(self.dims)
         mean_fn = mean_fn or gp.mean_functions.Constant()
-        self._gpr = GPRModel(kern=kern, mean_fn=mean_fn)
+        self._gpr = GPflowRegressor(gp.gpr.GPR, kern=kern, mean_fn=mean_fn)
 
         if seed:
             np.random.seed(seed)
@@ -132,7 +131,8 @@ class GPflowSampler(Sampler):
 
         if real:
             X_real, y_real = self.get_real_data()
-            m = GPRModel(kern=self._gpr.kernel, mean_fn=self._gpr.mean_function)
+            m = GPflowRegressor(gp.gpr.GPR, kern=self._gpr.kernel,
+                                mean_fn=self._gpr.mean_function)
             m.fit(X_real, y_real, params=self._gpr.params())
         else:
             m = self._gpr

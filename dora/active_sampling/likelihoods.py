@@ -42,7 +42,7 @@ def dirichlet(alpha, y):
 
 
 class Dirichlet(Likelihood):
-    """ Reparameterised Dirichlet distributions with mean given by:
+    """ Reparameterised Dirichlet distribution with mean given by:
 
             m = sigma(f)
 
