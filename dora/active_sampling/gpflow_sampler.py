@@ -22,7 +22,7 @@ class GPflowSampler(Sampler):
         self.acq_fn = acq_fn
         kern = kern or gp.kernels.RBF(self.dims)
         mean_fn = mean_fn or gp.mean_functions.Constant()
-        self._gpr = GPflowRegressor(gp.gpr.GPR, kern=kern, mean_fn=mean_fn)
+        self._gpr = GPRModel(kern=kern, mean_fn=mean_fn)
 
         if seed:
             np.random.seed(seed)
@@ -67,7 +67,16 @@ class GPflowSampler(Sampler):
 
         return ind
 
-    def pick(self, Xq=None, n_test=500):
+    def pick(self, n_test=500):
+        """ Return the feature point to observe next and the expected value
+            of the observation.
+        """
+        Xq = self.random_sample(n_test)
+        i, y = self.pick_from(Xq)
+        x = Xq[i, :]
+        return x, y
+
+    def pick_from(self, Xq=None, n_test=500):
         """ Pick a feature location for the next observation, which maximises
             the acquisition function.
         """
@@ -91,10 +100,10 @@ class GPflowSampler(Sampler):
                 Xq = random_sample(self.lower, self.upper, n_test)
 
             # Compute the posterior distributions at those points
-            Yq_exp, Yq_var = self._gpr.predict_y(Xq)
+            Yq_exp, Yq_var = self._gpr.predict_proba(Xq)
 
             # Acquisition Function
-            yq_acq = self.acquisition_function(Yq_exp, Yq_var)
+            yq_acq = self.acq_fn(Yq_exp, Yq_var)
 
             # Find the test point with the highest acquisition level
             iq_acq = np.argmax(yq_acq)
@@ -115,9 +124,9 @@ class GPflowSampler(Sampler):
         if len(Xq.shape) == 1:
             Xq = Xq[:, np.newaxis]
 
-        Yq_exp, Yq_var = self._gpr.predict_y(Xq)
+        Yq_exp, Yq_var = self._gpr.predict_proba(Xq)
 
-        yq_acq = self.acquisition_function(Yq_exp, Yq_var)
+        yq_acq = self.acq_fn(Yq_exp, Yq_var)
 
         return yq_acq, np.argmax(yq_acq)
 
@@ -131,7 +140,7 @@ class GPflowSampler(Sampler):
 
         if real:
             X_real, y_real = self.get_real_data()
-            m = GPflowRegressor(gp.gpr.GPR, kern=self._gpr.kernel,
+            m = GPRModel(kern=self._gpr.kernel, mean_fn=self._gpr.mean_function)
                                 mean_fn=self._gpr.mean_function)
             m.fit(X_real, y_real, params=self._gpr.params())
         else:
