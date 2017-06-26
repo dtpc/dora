@@ -2,24 +2,30 @@ import GPflow as gp
 from sklearn.base import BaseEstimator
 from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
-
+from sklearn.cluster import MiniBatchKMeans
+from tqdm import tqdm
 
 
 class PrintCallback:
-    def __init__(self):
+    def __init__(self, maxiter, updateiter=None):
         self.ii = 0
+        self.updateiter = updateiter or int(maxiter / 100)
+        self.pbar = tqdm(desc='GPflow iterations', total=maxiter)
 
     def __call__(self, k):
-        if self.ii % 1000 == 0:
-            print("GPFlow iteration {}".format(self.ii))
+        if self.ii % self.updateiter == 0:
+            self.pbar.update(self.updateiter)
         self.ii += 1
+
+    def __del__(self):
+        self.pbar.close()
+
 
 
 class GPflowRegressor(BaseEstimator):
     """ sklearn-like wrapper around GPflow regressors. """
 
-    def __init__(self, gp_class, kern, **model_args):
-        self.gp_class = gp_class
+    def __init__(self, kern, **model_args):
         self.kern = kern
 
         default_args = {
@@ -35,18 +41,20 @@ class GPflowRegressor(BaseEstimator):
 
         self.optimize_args = {
             'method': 'L-BFGS-B',
-            'maxiter': 10000,
-            'callback': PrintCallback()
+            'maxiter': 10000
         }
 
-    def fit(self, x, y, param_dict=None, optimize_args=None):
+    def _create_model(self, X, y):
+        raise NotImplementedError()
+
+    def fit(self, X, y, param_dict=None, optimize_args=None):
         """ Fit the GP model. Optimise the model if params is not provided. """
-        if x.shape[1] != self.kern.input_dim:
+        if X.shape[1] != self.kern.input_dim:
             msg = 'Dimensions of `x` ({}) do not match kernel dimensions ({})'
-            raise ValueError(msg.format(x.shape[1], self.kern.input_dim))
+            raise ValueError(msg.format(X.shape[1], self.kern.input_dim))
 
         # create the GPflow model
-        self.model = self.gp_class(x, y, kern=self.kern, **self.model_args)
+        self._create_model(X, y)
 
         if param_dict is None:
             optimize_args = optimize_args or {}
@@ -56,10 +64,10 @@ class GPflowRegressor(BaseEstimator):
 
         return self
 
-    def predict_proba(self, x):
+    def predict_proba(self, X):
         """ Return the GPs expected value and variance at the points in `x`. """
         check_is_fitted(self, 'model')
-        y_exp, y_var = self.model.predict_y(x)
+        y_exp, y_var = self.model.predict_y(X)
         return y_exp, y_var
 
     def is_fitted(self):
@@ -75,6 +83,7 @@ class GPflowRegressor(BaseEstimator):
         """ Optimise the GP hyperparams. """
         optimize_args = self.optimize_args.copy()
         optimize_args.update(kwargs)
+        optimize_args['callback'] = PrintCallback(optimize_args['maxiter'])
         res = self.model.optimize(**optimize_args)
         print(res)
 
@@ -115,3 +124,38 @@ class GPflowRegressor(BaseEstimator):
             s = "{}('Model not instantiated.')".format(class_and_model)
 
         return s
+
+
+class SkGPR(GPflowRegressor):
+
+    def __init__(self, kern, **model_args):
+        super().__init__(kern, **model_args)
+        self.gp_class = gp.gpr.GPR
+
+    def _create_model(self, X, y):
+        self.model = self.gp_class(X, y, kern=self.kern, **self.model_args)
+
+
+class SkVGP(GPflowRegressor):
+
+    def __init__(self, kern, **model_args):
+        super().__init__(kern, **model_args)
+        self.gp_class = gp.vgp.VGP
+
+    def _create_model(self, X, y):
+        self.model = self.gp_class(X, y, kern=self.kern, **self.model_args)
+
+
+class SkSVGP(GPflowRegressor):
+
+    def __init__(self, kern, inducing, **model_args):
+        super().__init__(kern, **model_args)
+        self.gp_class = gp.vgp.VGP
+        self.inducing = inducing
+
+    def _create_model(self, X, y):
+        km = MiniBatchKMeans(n_clusters=self.inducing,
+                             random_state=int(self.random_state + 1),
+                             minibatch_size=100)
+        Z = km.fit(X).cluster_centers_
+        self.model = gp.svgp.SVGP(X, y, kern=self.kern, Z=Z, **self.model_args)
