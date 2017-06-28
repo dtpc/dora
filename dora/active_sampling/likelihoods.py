@@ -6,9 +6,11 @@ from GPflow.param import AutoFlow
 from GPflow import transforms
 import tensorflow as tf
 import numpy as np
+from inspect import isclass
+from types import MethodType
 
 
-def likelihood_compute(lh_class):
+def likelihood_compute(lh):
     """ Wrapper for GPflow `Likelihood` subclasses which adds compute_* methods
         which run tensor flow when called and return results.
 
@@ -19,6 +21,7 @@ def likelihood_compute(lh_class):
             beta.compute_logp(1, 2)
             >> array([ 10.05222934])
     """
+
     methods = {
         'logp': [(np.float64,), (np.float64,)],
         'conditional_mean': [(np.float64,)],
@@ -28,12 +31,19 @@ def likelihood_compute(lh_class):
         'variational_expectations': [(np.float64,), (np.float64,), (np.float64,)]
     }
 
+    lh_class = lh if isclass(lh) else lh.__class__
+
     for name, tf_args in methods.items():
         m = getattr(lh_class, name)
         new_m = AutoFlow(*tf_args)(m)
-        setattr(lh_class, 'compute_' + name, new_m)
 
-    return lh_class
+        # bind method to class if `lh` is an instance
+        if not isclass(lh):
+            new_m = MethodType(new_m, lh)
+
+        setattr(lh, 'compute_' + name, new_m)
+
+    return lh
 
 
 def dirichlet(alpha, y):
