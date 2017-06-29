@@ -87,7 +87,7 @@ class SkGPflowRegressor(BaseEstimator, RegressorMixin):
         res = y_exp
 
         if return_std:
-            res = (res, np.sqrt(y_exp))
+            res = (res, np.sqrt(y_var))
         if return_cov:
             raise NotImplementedError
 
@@ -95,12 +95,14 @@ class SkGPflowRegressor(BaseEstimator, RegressorMixin):
 
     def predict_quantiles(self, X, quantiles=None):
         """ Return the predicted value y at defined quantiles. """
-        q = quantiles or [0.05, 0.95]
+        q = quantiles or [0.025, 0.975]
         samps = gaussian_quantiles(q)
         mu, var = self.model.predict_f(X)
         latent_q = (mu[:, :, np.newaxis]
                     + np.sqrt(var[:, :, np.newaxis]) * samps[np.newaxis, :])
-        q_exp = self.model.likelihood.compute_conditional_mean(latent_q)
+        qmu = self.model.likelihood.compute_conditional_mean(latent_q)
+        qvar = self.model.likelihood.compute_conditional_variance(latent_q)
+        q_exp = qmu + np.sqrt(qvar) * samps
         return q_exp
 
     def is_fitted(self):
@@ -118,6 +120,7 @@ class SkGPflowRegressor(BaseEstimator, RegressorMixin):
         optimize_args.update(kwargs)
         optimize_args['callback'] = PrintCallback(optimize_args['maxiter'])
         res = self.model.optimize(**optimize_args)
+        return res
 
     def get_params(self, deep=False):
         """ Get GP parameters in sklearn form. Keyword arg `deep` is ignored."""
@@ -167,6 +170,15 @@ class SkGPR(SkGPflowRegressor):
     def _create_model(self, X, y):
         self.model = self.gp_class(X, y, kern=self.kern, **self.model_args)
         self.model.likelihood = likelihood_compute(self.model.likelihood)
+
+    def predict_quantiles(self, X, quantiles=None):
+        """ Return the predicted value y at defined quantiles. """
+        q = quantiles or [0.025, 0.975]
+        samps = gaussian_quantiles(q)
+        mu, var = self.model.predict_y(X)
+        q_exp = (mu[:, :, np.newaxis]
+                 + np.sqrt(var[:, :, np.newaxis]) * samps[np.newaxis, :])
+        return q_exp
 
 
 class SkSGPR(SkGPflowRegressor):
