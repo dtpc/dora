@@ -1,7 +1,7 @@
-from GPflow.gpr import GPR
-from GPflow.mean_functions import Zero
-from GPflow.param import DataHolder
-from GPflow.param import AutoFlow
+from gpflow.gpr import GPR
+from gpflow.mean_functions import Zero
+from gpflow.param import DataHolder
+from gpflow.param import AutoFlow
 
 import tensorflow as tf
 import numpy as np

@@ -1,9 +1,9 @@
 
-from GPflow.likelihoods import Likelihood
-from GPflow.likelihoods import probit
-from GPflow.param import Param
-from GPflow.param import AutoFlow
-from GPflow import transforms
+from gpflow.likelihoods import Likelihood
+from gpflow.likelihoods import probit
+from gpflow.param import Param
+from gpflow.param import AutoFlow
+from gpflow import transforms
 import tensorflow as tf
 import numpy as np
 from inspect import isclass

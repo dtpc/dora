@@ -1,8 +1,8 @@
-from .sk_gpflow import GPflowRegressor
+from .sk_gpflow import SkGPflowRegressor
 from .base_sampler import Sampler, random_sample
 from .acquisition_functions import UpperBound
 
-import GPflow as gp
+import gpflow as gp
 import numpy as np
 
 
@@ -22,7 +22,7 @@ class GPflowSampler(Sampler):
         self.acq_fn = acq_fn
         kern = kern or gp.kernels.RBF(self.dims)
         mean_fn = mean_fn or gp.mean_functions.Constant()
-        self._gpr = GPRModel(kern=kern, mean_fn=mean_fn)
+        self._gpr = SkGPflowRegressor(kern=kern, mean_fn=mean_fn)
 
         if seed:
             np.random.seed(seed)
@@ -53,7 +53,6 @@ class GPflowSampler(Sampler):
         if self._gpr.is_fitted():
             params = None if train else self._gpr.params()
             self._gpr.fit(self.X(), self.y(), params=params)
-
 
     def update(self, uid, y_true):
         """ Update a job id with an observed value. Makes a virtual
@@ -140,8 +139,7 @@ class GPflowSampler(Sampler):
 
         if real:
             X_real, y_real = self.get_real_data()
-            m = GPRModel(kern=self._gpr.kernel, mean_fn=self._gpr.mean_function)
-                                mean_fn=self._gpr.mean_function)
+            m = SkGPflowRegressor(kern=self._gpr.kernel, mean_fn=self._gpr.mean_function)
             m.fit(X_real, y_real, params=self._gpr.params())
         else:
             m = self._gpr
