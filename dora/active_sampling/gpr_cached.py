@@ -2,9 +2,12 @@ from gpflow.gpr import GPR
 from gpflow.mean_functions import Zero
 from gpflow.param import DataHolder
 from gpflow.param import AutoFlow
+from gpflow import session
+from gpflow._settings import settings
 
 import tensorflow as tf
 import numpy as np
+import sys
 
 
 class GPRCached(GPR):
@@ -48,18 +51,21 @@ class GPRCached(GPR):
         GPR.set_state(self, x)
         self.update_cache()
 
-    @AutoFlow()
-    def _compute_cache(self):
-        """Compute cache."""
-        kernel = (self.kern.K(self.X)
-                  + tf.eye(tf.shape(self.X)[0], dtype=np.float64)
+    def _cholesky(self, X, Y):
+
+        kernel = (self.kern.K(X)
+                  + tf.eye(tf.shape(X)[0], dtype=np.float64)
                   * self.likelihood.variance)
 
         cholesky = tf.cholesky(kernel, name='gp_cholesky')
-
-        target = self.Y - self.mean_function(self.X)
+        target = Y - self.mean_function(X)
         alpha = tf.matrix_triangular_solve(cholesky, target, name='gp_alpha')
         return cholesky, alpha
+
+    @AutoFlow()
+    def _compute_cache(self):
+        """Compute cache."""
+        return self._cholesky(self.X, self.Y)
 
     def update_cache(self):
         """Update the cache after adding data points."""
@@ -168,6 +174,19 @@ class GPRCached(GPR):
         self.Y.set_data(np.delete(self.Y.value, indexes, axis=0))
         self.alpha = self._alpha_update()
 
+    def _predict(self, X, Xnew, Y, cholesky, alpha, full_cov=False):
+        Kx = self.kern.K(X, Xnew)
+        A = tf.matrix_triangular_solve(cholesky, Kx, lower=True)
+        fmean = (tf.matmul(tf.transpose(A), alpha) + self.mean_function(Xnew))
+        if full_cov:
+            fvar = self.kern.K(Xnew) - tf.matmul(tf.transpose(A), A)
+            shape = tf.stack([1, 1, tf.shape(Y)[1]])
+            fvar = tf.tile(tf.expand_dims(fvar, 2), shape)
+        else:
+            fvar = self.kern.Kdiag(Xnew) - tf.reduce_sum(tf.square(A), 0)
+            fvar = tf.tile(tf.reshape(fvar, (-1, 1)), [1, tf.shape(Y)[1]])
+        return fmean, fvar
+
     def build_predict(self, Xnew, full_cov=False):
         """Predict mean and variance of the GP at locations in Xnew.
 
@@ -187,15 +206,121 @@ class GPRCached(GPR):
             Diagonal of the covariance matrix (or full matrix).
 
         """
-        Kx = self.kern.K(self.X, Xnew)
-        A = tf.matrix_triangular_solve(self.cholesky, Kx, lower=True)
-        fmean = (tf.matmul(tf.transpose(A), self.alpha)
-                 + self.mean_function(Xnew))
-        if full_cov:
-            fvar = self.kern.K(Xnew) - tf.matmul(tf.transpose(A), A)
-            shape = tf.stack([1, 1, tf.shape(self.Y)[1]])
-            fvar = tf.tile(tf.expand_dims(fvar, 2), shape)
-        else:
-            fvar = self.kern.Kdiag(Xnew) - tf.reduce_sum(tf.square(A), 0)
-            fvar = tf.tile(tf.reshape(fvar, (-1, 1)), [1, tf.shape(self.Y)[1]])
+        fmean, fvar = self._predict(self.X, Xnew, self.Y, self.cholesky,
+                                    self.alpha, full_cov=full_cov)
         return fmean, fvar
+
+    def build_loo(self):
+
+        def density_i(X, Xnew, Y, Ynew):
+            cholesky, alpha = self._cholesky(X, Y)
+            fmean, fvar = self._predict(X, Xnew, Y, cholesky, alpha,
+                                        full_cov=False)
+            logp_i = self.likelihood.predict_density(fmean, fvar, Ynew)
+            return logp_i
+
+        i_sum = (tf.constant(0), tf.constant(0.0))
+
+        def body(i, sum):
+            Xnew = tf.slice(self.X, [i, 0], [1, -1])
+            Ynew = tf.slice(self.Y, [i, 0], [1, -1])
+
+            js = tf.concat(tf.range(i), tf.range(i+1, tf.shape(self.X)[0]))
+            X = tf.gather(self.X, js)
+            Y = tf.gather(self.Y, js)
+
+            logp_i = density_i(X, Xnew, Y, Ynew)
+
+            return tf.add(i, 1), tf.add(sum, logp_i)
+
+        def condition(i, sum):
+            return tf.less(i, tf.subtract(tf.shape(self.X)[0], 1))
+
+        sum_logp = tf.while_loop(condition, body, i_sum)[1]
+        return sum_logp
+
+    def build_loo_cv(self, X, Y):
+
+        def density_i(i):
+            Xi = tf.constant(X[np.newaxis, i, :])
+            Yi = tf.constant(Y[np.newaxis, i, :])
+            Xjs = tf.constant(np.delete(X, i, axis=0))
+            Yjs = tf.constant(np.delete(Y, i, axis=0))
+            cholesky, alpha = self._cholesky(Xjs, Yjs)
+            fmean, fvar = self._predict(Xjs, Xi, Yjs, cholesky, alpha,
+                                        full_cov=False)
+            logp_i = self.likelihood.predict_density(fmean, fvar, Yi)
+            return logp_i
+
+        logp_is = [density_i(i) for i in range(X.shape[0])]
+        sum_logp = tf.reduce_sum(logp_is)
+
+        return sum_logp
+
+    def optimize(self, loo_cv=False, method='L-BFGS-B', tol=None, callback=None,
+                 maxiter=1000, **kw):
+        self._compile(loo_cv=loo_cv)
+        res = super().optimize(method=method, tol=tol, callback=callback,
+                                    maxiter=maxiter, **kw)
+        return res
+
+    def _compile(self, optimizer=None, loo_cv=False):
+        """
+        compile the tensorflow function "self._objective"
+        """
+        self._graph = tf.Graph()
+        self._session = session.get_session(graph=self._graph,
+                                            output_file_name=settings.profiling.output_file_name + "_objective",
+                                            output_directory=settings.profiling.output_directory,
+                                            each_time=settings.profiling.each_time)
+        with self._graph.as_default():
+            self._free_vars = tf.Variable(self.get_free_state())
+
+            self.make_tf_array(self._free_vars)
+
+            if loo_cv:
+                X = self.X.value
+                Y = self.Y.value
+                with self.tf_mode():
+                    f = self.build_loo_cv(X, Y)
+                    g, = tf.gradients(f, self._free_vars)
+            else:
+                with self.tf_mode():
+                    f = self.build_likelihood() + self.build_prior()
+                    g, = tf.gradients(f, self._free_vars)
+
+            self._minusF = tf.negative(f, name='objective')
+            self._minusG = tf.negative(g, name='grad_objective')
+
+            # The optimiser needs to be part of the computational graph, and needs
+            # to be initialised before tf.initialise_all_variables() is called.
+            if optimizer is None:
+                opt_step = None
+            else:
+                opt_step = optimizer.minimize(self._minusF,
+                                              var_list=[self._free_vars])
+            init = tf.global_variables_initializer()
+        self._session.run(init)
+
+        # build tensorflow functions for computing the likelihood
+        if settings.verbosity.tf_compile_verb:
+            print("compiling tensorflow function...")
+        sys.stdout.flush()
+
+        self._feed_dict_keys = self.get_feed_dict_keys()
+
+        def obj(x):
+            self.num_fevals += 1
+            feed_dict = {self._free_vars: x}
+            self.update_feed_dict(self._feed_dict_keys, feed_dict)
+            f, g = self._session.run([self._minusF, self._minusG],
+                                     feed_dict=feed_dict)
+            return f.astype(np.float64), g.astype(np.float64)
+
+        self._objective = obj
+        if settings.verbosity.tf_compile_verb:
+            print("done")
+        sys.stdout.flush()
+        self._needs_recompile = False
+
+        return opt_step
