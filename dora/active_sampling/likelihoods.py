@@ -47,6 +47,8 @@ def likelihood_compute(lh):
 
 
 def dirichlet(alpha, y):
+    """ Dirichlet log density. """
+    y = tf.clip_by_value(y, 1e-6, 1-1e-6)
     lnB = tf.reduce_sum(tf.lgamma(alpha)) - tf.lgamma(tf.reduce_sum(alpha))
     return tf.reduce_sum((alpha - 1) * tf.log(y)) - lnB
 
@@ -68,6 +70,11 @@ class Dirichlet(Likelihood):
         self.invlink = invlink
 
     def logp(self, F, Y):
+        print("Dirichlet.logp")
+        print(F, F.get_shape())
+        print(Y, Y.get_shape())
+        F = tf.Print(F,[F, tf.shape(F), "Dirichlet.logp F:"])
+        Y = tf.Print(Y,[Y, tf.shape(Y), "Dirichlet.logp Y:"])
         mean = self.invlink(F)
         alpha = mean * self.scale
         p = dirichlet(alpha, Y)
@@ -79,3 +86,40 @@ class Dirichlet(Likelihood):
     def conditional_variance(self, F):
         mean = self.invlink(F)
         return (mean - tf.square(mean)) / (self.scale * tf.reduce_sum(mean) + 1.)
+
+
+from gpflow import densities
+class BetaTest(Likelihood):
+    """
+    This uses a reparameterisation of the Beta density. We have the mean of the
+    Beta distribution given by the transformed process:
+
+        m = sigma(f)
+
+    and a scale parameter. The familiar alpha, beta parameters are given by
+
+        m     = alpha / (alpha + beta)
+        scale = alpha + beta
+
+    so:
+        alpha = scale * m
+        beta  = scale * (1-m)
+    """
+
+    def __init__(self, invlink=probit, scale=1.0):
+        Likelihood.__init__(self)
+        self.scale = Param(scale, transforms.positive)
+        self.invlink = invlink
+
+    def logp(self, F, Y):
+        mean = self.invlink(F)
+        alpha = mean * self.scale
+        beta = self.scale - alpha
+        return densities.beta(alpha, beta, Y)
+
+    def conditional_mean(self, F):
+        return self.invlink(F)
+
+    def conditional_variance(self, F):
+        mean = self.invlink(F)
+        return (mean - tf.square(mean)) / (self.scale + 1.)
