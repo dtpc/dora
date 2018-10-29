@@ -123,7 +123,7 @@ class SkGPflowRegressor(BaseEstimator, RegressorMixin):
         res = self.model.optimize(**optimize_args)
         return res
 
-    def get_params1(self, deep=False):
+    def get_params(self, deep=False):
         """ Get GP parameters in sklearn form. Keyword arg `deep` is ignored."""
         check_is_fitted(self, 'model')
         p_dict = self.model.get_parameter_dict()
@@ -134,7 +134,7 @@ class SkGPflowRegressor(BaseEstimator, RegressorMixin):
         params = {sk_param_name(k): v for k, v in p_dict.items()}
         return params
 
-    def set_params1(self, **params):
+    def set_params(self, **params):
         """ Set GP params using sklearn form. """
         check_is_fitted(self, 'model')
         p_dict = self.model.get_parameter_dict()
@@ -148,7 +148,7 @@ class SkGPflowRegressor(BaseEstimator, RegressorMixin):
 
         self.model.set_parameter_dict(p_dict)
 
-    def __repr__1(self):
+    def __repr__(self):
         """ sklearn representation with GPflow model name. """
         class_name = self.__class__.__name__
         gp_class_name = self.gp_class.__module__ + "." + self.gp_class.__name__

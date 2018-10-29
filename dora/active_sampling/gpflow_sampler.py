@@ -1,9 +1,10 @@
-from .sk_gpflow import SkGPflowRegressor
+from .sk_gpflow import SkGPR
 from .base_sampler import Sampler, random_sample
 from .acquisition_functions import UpperBound
 
 import gpflow as gp
 import numpy as np
+import tensorflow as tf
 
 
 class GPflowSampler(Sampler):
@@ -20,9 +21,15 @@ class GPflowSampler(Sampler):
 
         self._n_train = n_train
         self.acq_fn = acq_fn
-        kern = kern or gp.kernels.RBF(self.dims)
+        kern = kern or gp.kernels.RBF(self.dims) + \
+                       gp.kernels.Constant(self.dims)
         mean_fn = mean_fn or gp.mean_functions.Constant()
-        self._gpr = SkGPflowRegressor(kern=kern, mean_fn=mean_fn)
+        self._gpr = SkGPR(kern=kern, mean_function=mean_fn)
+
+        self.opt_args = dict(
+              method=tf.train.AdamOptimizer(learning_rate=0.05),
+              maxiter=10000
+        )
 
         if seed:
             np.random.seed(seed)
@@ -52,7 +59,8 @@ class GPflowSampler(Sampler):
 
         if self._gpr.is_fitted():
             params = None if train else self._gpr.params()
-            self._gpr.fit(self.X(), self.y(), params=params)
+            self._gpr.fit(self.X(), self.y(), params=params,
+                          optimize_args=self.opt_args)
 
     def update(self, uid, y_true):
         """ Update a job id with an observed value. Makes a virtual
@@ -61,8 +69,9 @@ class GPflowSampler(Sampler):
         ind = self._update(uid, y_true)
         self.update_y_mean()
         if self._gpr.is_fitted():
-            params = self._gpr.params()
-            self._gpr.fit(self.X(), self.y(), params=params)
+            params = self._gpr.model.get_parameter_dict()
+            self._gpr.fit(self.X(), self.y(), param_dict=params,
+                          optimize_args=self.opt_args)
 
         return ind
 
@@ -70,12 +79,16 @@ class GPflowSampler(Sampler):
         """ Return the feature point to observe next and the expected value
             of the observation.
         """
-        Xq = self.random_sample(n_test)
-        i, y = self.pick_from(Xq)
-        x = Xq[i, :]
-        return x, y
+        n = len(self.X)
+        if n < self._n_train:
+            n_test = 1
 
-    def pick_from(self, Xq=None, n_test=500):
+        Xq = random_sample(self.lower, self.upper, n_test)
+
+        x, _, uid = self.pick_from(Xq)
+        return x, uid
+
+    def pick_from(self, Xq):
         """ Pick a feature location for the next observation, which maximises
             the acquisition function.
         """
@@ -83,23 +96,17 @@ class GPflowSampler(Sampler):
 
         # If we do not have enough samples yet, randomly sample for more!
         if n < self._n_train:
-            if Xq is None:
-                xq = random_sample(self.lower, self.upper, 1)[0]
-            else:
-                iq_acq = np.random.randint(Xq.shape[0], size=1)[0]
-                xq = Xq[iq_acq,:]
+            iq_acq = np.random.randint(Xq.shape[0], size=1)[0]
+            xq = Xq[iq_acq, :]
             yq_exp = self.y_mean  # Note: Can be 'None' initially
 
         else:
             if not self._gpr.is_fitted():
-                self._gpr.fit(self.X(), self.y())
-
-            # Randomly sample the volume for test points
-            if Xq is None:
-                Xq = random_sample(self.lower, self.upper, n_test)
+                self._gpr.fit(self.X(), self.y(), optimize_args=self.opt_args)
 
             # Compute the posterior distributions at those points
-            Yq_exp, Yq_var = self._gpr.predict_proba(Xq)
+            Yq_exp, Yq_std = self._gpr.predict(Xq, return_std=True)
+            Yq_var = np.square(Yq_std)
 
             # Acquisition Function
             yq_acq = self.acq_fn(Yq_exp, Yq_var)
@@ -112,10 +119,7 @@ class GPflowSampler(Sampler):
         # Place a virtual observation...
         uid = Sampler._assign(self, xq, yq_exp)  # it can be None...
 
-        if Xq is not None:
-            xq = xq, iq_acq
-
-        return xq, uid
+        return xq, iq_acq, uid
 
     def eval_acq(self, Xq):
         """ Evaluate the acquisition function for a set of query points (Xq).
@@ -123,7 +127,8 @@ class GPflowSampler(Sampler):
         if len(Xq.shape) == 1:
             Xq = Xq[:, np.newaxis]
 
-        Yq_exp, Yq_var = self._gpr.predict_proba(Xq)
+        Yq_exp, Yq_std = self._gpr.predict(Xq, return_std=True)
+        Yq_var = np.square(Yq_std)
 
         yq_acq = self.acq_fn(Yq_exp, Yq_var)
 
@@ -139,11 +144,14 @@ class GPflowSampler(Sampler):
 
         if real:
             X_real, y_real = self.get_real_data()
-            m = SkGPflowRegressor(kern=self._gpr.kernel, mean_fn=self._gpr.mean_function)
-            m.fit(X_real, y_real, params=self._gpr.params())
+            m = SkGPR(kern=self._gpr.model.kern,
+                      mean_function=self._gpr.model.mean_function)
+            m.fit(X_real, y_real, optimize_args=self.opt_args,
+                  param_dict=self._gpr.model.get_parameter_dict())
         else:
             m = self._gpr
 
-        Yq_exp, Yq_var = m.predict_proba(Xq)
+        Yq_exp, Yq_std = m.predict(Xq, return_std=True)
+        Yq_var = np.square(Yq_std)
 
         return Yq_exp, Yq_var
